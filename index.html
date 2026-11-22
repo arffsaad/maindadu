@@ -1,0 +1,662 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dadu — Multiplayer Dice</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<style>
+  :root{
+    --bg:#14101f; --panel:#1f1830; --panel2:#2a2140; --line:#3b2f58;
+    --text:#efe9ff; --muted:#a99bc9; --gold:#f5c04a; --gold2:#ffdf8a;
+    --good:#4fd18b; --bad:#ff6b7a; --accent:#8b6cff; --accent2:#b49cff;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;min-height:100%;background:radial-gradient(1200px 600px at 50% -10%,#2b1f4a 0%,var(--bg) 60%) fixed;color:var(--text);font-family:Inter,system-ui,sans-serif}
+  button{font:inherit;cursor:pointer;border:0;border-radius:12px;padding:12px 18px;font-weight:600;color:var(--text);background:var(--panel2);transition:transform .08s,background .15s,opacity .15s}
+  button:hover:not(:disabled){background:#352a52}
+  button:active:not(:disabled){transform:scale(.97)}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  button.primary{background:linear-gradient(180deg,var(--gold2),var(--gold));color:#2a1a00}
+  button.primary:hover:not(:disabled){background:linear-gradient(180deg,#fff0b8,var(--gold2))}
+  button.ghost{background:transparent;border:1px solid var(--line)}
+  input{font:inherit;color:var(--text);background:#120d1d;border:1px solid var(--line);border-radius:12px;padding:12px 14px;outline:none;width:100%}
+  input:focus{border-color:var(--accent)}
+  h1,h2,h3{font-family:Cinzel,serif;margin:0}
+  .wrap{max-width:1100px;margin:0 auto;padding:20px 16px 40px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:20px;padding:20px}
+  .muted{color:var(--muted)}
+  .row{display:flex;gap:10px;align-items:center}
+  .col{display:flex;flex-direction:column;gap:12px}
+  .center{text-align:center}
+  .coin{display:inline-flex;align-items:center;gap:6px;font-weight:700;color:var(--gold2)}
+  .coin::before{content:"";width:14px;height:14px;border-radius:50%;background:radial-gradient(circle at 35% 35%,#fff3c4,var(--gold) 55%,#b8831c);box-shadow:0 0 0 1px #8a5d10 inset}
+
+  /* home */
+  .home{max-width:440px;margin:6vh auto 0}
+  .logo{font-size:44px;letter-spacing:2px;text-align:center;background:linear-gradient(180deg,var(--gold2),var(--gold));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .tag{text-align:center;margin:6px 0 24px}
+  .rules{font-size:14px;line-height:1.55;margin-top:18px}
+  .rules li{margin:4px 0}
+  .divider{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:13px;margin:6px 0}
+  .divider::before,.divider::after{content:"";flex:1;height:1px;background:var(--line)}
+
+  /* room */
+  .top{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px}
+  .code{font-family:Cinzel,serif;font-size:20px;letter-spacing:1px}
+  .grid{display:grid;grid-template-columns:300px 1fr;gap:16px}
+  @media (max-width:820px){.grid{grid-template-columns:1fr}.side{order:2}}
+  .stats{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px}
+  .stat{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:12px 14px}
+  .stat .k{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:1px}
+  .stat .v{font-size:22px;font-weight:700;margin-top:4px}
+  .pot .v{color:var(--gold2)}
+  .players{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+  .pl{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:12px;background:var(--panel2);border:1px solid transparent}
+  .pl.me{border-color:var(--accent)}
+  .pl.off{opacity:.45}
+  .pl.out{opacity:.5;text-decoration:line-through}
+  .pl.win{border-color:var(--gold);box-shadow:0 0 18px -4px var(--gold)}
+  .av{width:32px;height:32px;border-radius:50%;display:grid;place-items:center;font-weight:700;color:#14101f;flex:none}
+  .pl .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .pl .sub{font-size:12px;color:var(--muted)}
+  .badge{font-size:11px;padding:2px 7px;border-radius:99px;background:#3a2d5c;color:var(--accent2);font-weight:600}
+  .pickchip{min-width:34px;text-align:center;padding:4px 8px;border-radius:8px;background:#120d1d;font-weight:700}
+  .pickchip.yes{background:var(--accent);color:#fff}
+
+  .stage{display:flex;flex-direction:column;align-items:center;gap:18px;min-height:420px}
+  .phase{font-size:13px;text-transform:uppercase;letter-spacing:2px;color:var(--accent2)}
+  .big{font-family:Cinzel,serif;font-size:28px;text-align:center}
+  .dice{width:190px;height:190px;filter:drop-shadow(0 14px 22px rgba(0,0,0,.5))}
+  .dice.spin{animation:tumble .45s linear infinite}
+  .dice.land{animation:land .5s cubic-bezier(.2,1.6,.4,1)}
+  @keyframes tumble{0%{transform:rotate(0) scale(1)}50%{transform:rotate(180deg) scale(.88)}100%{transform:rotate(360deg) scale(1)}}
+  @keyframes land{0%{transform:scale(.6) rotate(-30deg)}100%{transform:scale(1) rotate(0)}}
+  .numgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(52px,1fr));gap:8px;width:100%}
+  .num{padding:12px 0;font-size:17px;font-weight:700;border-radius:12px;background:var(--panel2);border:1px solid var(--line);position:relative}
+  .num.mine{background:var(--accent);border-color:var(--accent2)}
+  .num.pending{outline:2px dashed var(--accent2)}
+  .num.taken{background:#120d1d;color:#6d5f8c}
+  .num .who{position:absolute;left:0;right:0;bottom:2px;font-size:9px;font-weight:500;color:var(--muted);overflow:hidden;white-space:nowrap;text-overflow:ellipsis;padding:0 3px}
+  .sizes{display:flex;flex-wrap:wrap;gap:8px;justify-content:center}
+  .sizes button{min-width:64px}
+  .sizes button.on{background:var(--accent);color:#fff}
+  .qrbox{background:#fff;padding:12px;border-radius:14px;display:inline-block}
+  .qrbox img,.qrbox canvas{display:block}
+  .linkline{font-size:12px;word-break:break-all;color:var(--muted);max-width:340px;text-align:center}
+  .banner{padding:14px 18px;border-radius:14px;text-align:center;font-weight:600;width:100%}
+  .banner.win{background:linear-gradient(90deg,#4a3410,#6b4b12,#4a3410);color:var(--gold2);border:1px solid var(--gold)}
+  .banner.miss{background:#2a1f3e;border:1px solid var(--line)}
+  .banner.lose{background:#3a1520;border:1px solid var(--bad);color:#ffc2c9}
+  .hist{font-size:13px;color:var(--muted);display:flex;flex-direction:column;gap:4px;margin-top:14px}
+  .modal{position:fixed;inset:0;background:rgba(8,5,15,.75);display:grid;place-items:center;z-index:10;padding:16px}
+  .modal .card{max-width:380px;width:100%;display:flex;flex-direction:column;align-items:center;gap:14px}
+  .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--panel2);border:1px solid var(--line);padding:10px 16px;border-radius:12px;z-index:20;font-size:14px}
+  .err{color:var(--bad);font-size:14px}
+  .confetti{position:fixed;top:-20px;font-size:22px;pointer-events:none;animation:fall linear forwards;z-index:30}
+  @keyframes fall{to{transform:translateY(110vh) rotate(540deg)}}
+  .dot{width:8px;height:8px;border-radius:50%;display:inline-block;background:var(--good)}
+  .dot.no{background:var(--bad)}
+</style>
+</head>
+<body>
+<div class="wrap" id="app"></div>
+
+<script>
+(() => {
+'use strict';
+
+// ---------- constants ----------
+const ARTIFACT_URL = "https://claude.ai/artifact/JNtoXzqqQdAatWfZY4Gtdr";
+const START = 200, BET = 20, MAX_PLAYERS = 24, ROLL_MS = 2900, ANIM_MS = 2500;
+const SIZES = [4, 6, 8, 10, 12, 20, 100];
+const COLORS = ['#f5c04a','#8b6cff','#4fd18b','#ff6b7a','#5ac8fa','#ff9f43','#e17cff','#a3e635','#f472b6','#38bdf8','#fbbf24','#34d399'];
+
+// ---------- local identity ----------
+function store(k, v){ try{ if(v===undefined) return localStorage.getItem(k); localStorage.setItem(k, v); }catch(e){ return null; } }
+function rid(n, alpha='abcdefghjkmnpqrstuvwxyz23456789'){ const a = new Uint32Array(n); crypto.getRandomValues(a); return Array.from(a, x => alpha[x % alpha.length]).join(''); }
+// per-tab id (survives reload, so a refresh keeps your seat and coins)
+function sstore(k, v){ try{ if(v===undefined) return sessionStorage.getItem(k); sessionStorage.setItem(k, v); }catch(e){ return null; } }
+let myPid = sstore('dadu.pid'); if(!myPid){ myPid = rid(12); sstore('dadu.pid', myPid); }
+let myName = store('dadu.name') || '';
+
+// ---------- runtime ----------
+let room = null;        // lobby room namespace
+let net = null;         // named room for this game
+let code = null;        // room code
+let isHost = false;
+let state = null;       // authoritative state (from host presence, or mine if host)
+let lastState = null;
+let hostGoneSince = null;
+let myPick = null;      // {n, round}
+let screen = 'home';    // home | connecting | room | error
+let errorMsg = '';
+let showInvite = false;
+let seenRollSeq = -1, animating = false, animTimer = null, animNum = 1, landed = false;
+let rollTimer = null;
+let joinWaitStart = 0;
+
+const app = document.getElementById('app');
+
+// ---------- tiny DOM helper ----------
+function h(tag, attrs, ...kids){
+  const el = document.createElement(tag);
+  if(attrs) for(const [k,v] of Object.entries(attrs)){
+    if(v == null || v === false) continue;
+    if(k === 'class') el.className = v;
+    else if(k === 'style') el.style.cssText = v;
+    else if(k.startsWith('on')) el.addEventListener(k.slice(2), v);
+    else if(k === 'html') el.innerHTML = v; // only for our own static SVG
+    else el.setAttribute(k, v === true ? '' : v);
+  }
+  for(const kid of kids.flat(Infinity)){
+    if(kid == null || kid === false) continue;
+    el.append(kid instanceof Node ? kid : document.createTextNode(String(kid)));
+  }
+  return el;
+}
+function toast(msg){ const t = h('div',{class:'toast'},msg); document.body.append(t); setTimeout(()=>t.remove(), 2200); }
+function colorFor(id){ let x=0; for(const c of id) x = (x*31 + c.charCodeAt(0))>>>0; return COLORS[x % COLORS.length]; }
+function cleanName(s){ return String(s||'').replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufeff]/g,'').trim().slice(0,16); }
+function inviteUrl(){ return ARTIFACT_URL ? ARTIFACT_URL.replace(/#.*$/,'') + '#' + code : ''; }
+
+// ---------- dice SVG ----------
+function poly(n, r, cx=50, cy=50, rot=-90){
+  const pts=[]; for(let i=0;i<n;i++){ const a=(rot + i*360/n)*Math.PI/180; pts.push((cx+r*Math.cos(a)).toFixed(1)+','+(cy+r*Math.sin(a)).toFixed(1)); } return pts.join(' ');
+}
+function diceSVG(sides, num){
+  const s = sides;
+  let shape, extra='', ty=50;
+  const fill='url(#g)', st='stroke="#d8c8ff" stroke-width="2.5" stroke-linejoin="round"';
+  const ln='stroke="rgba(255,255,255,.28)" stroke-width="1.5" fill="none"';
+  if(s<=4){ shape=`<polygon points="50,6 95,88 5,88" fill="${fill}" ${st}/>`; ty=64; }
+  else if(s<=6){ shape=`<rect x="10" y="10" width="80" height="80" rx="14" fill="${fill}" ${st}/>`; }
+  else if(s<=8){ shape=`<polygon points="50,3 95,50 50,97 5,50" fill="${fill}" ${st}/>`; extra=`<polyline points="5,50 50,30 95,50" ${ln}/>`; ty=58; }
+  else if(s<=10){ shape=`<polygon points="50,3 95,44 50,97 5,44" fill="${fill}" ${st}/>`; extra=`<polyline points="5,44 50,62 95,44" ${ln}/><line x1="50" y1="62" x2="50" y2="97" ${ln}/>`; ty=44; }
+  else if(s<=12){ shape=`<polygon points="${poly(5,47,50,53)}" fill="${fill}" ${st}/>`; extra=`<polygon points="${poly(5,26,50,53)}" ${ln}/>`; ty=55; }
+  else if(s<=20){ shape=`<polygon points="50,3 91,26 91,74 50,97 9,74 9,26" fill="${fill}" ${st}/>`; extra=`<polygon points="50,24 78,70 22,70" ${ln}/><path d="M50,3 L50,24 M91,26 L78,70 M9,26 L22,70 M91,74 L78,70 M9,74 L22,70 M50,97 L50,70" ${ln}/>`; ty=56; }
+  else { shape=`<circle cx="50" cy="50" r="46" fill="${fill}" ${st}/>`; extra=`<circle cx="50" cy="50" r="32" ${ln}/>`; }
+  const txt = String(num ?? '?');
+  const fs = txt.length>=3 ? 22 : txt.length===2 ? 28 : 34;
+  return `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+    <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7c5cff"/><stop offset="1" stop-color="#3a1f8f"/></linearGradient></defs>
+    ${shape}${extra}
+    <text x="50" y="${ty}" text-anchor="middle" dominant-baseline="central" font-family="Cinzel,serif" font-weight="800" font-size="${fs}" fill="#fff" stroke="#1b0f45" stroke-width="1">${txt}</text>
+  </svg>`;
+}
+
+// ---------- presence helpers ----------
+function peerList(){ return net ? net.peers() : []; }
+function presentPlayers(){
+  const m = new Map();
+  for(const p of peerList()){
+    const pr = p.presence || {};
+    if(typeof pr.pid === 'string' && pr.in === true && !m.has(pr.pid)) m.set(pr.pid, pr);
+  }
+  return m;
+}
+function hostPeers(){
+  return peerList().filter(p => p.presence && p.presence.state && p.presence.state.code === code)
+    .sort((a,b) => (b.presence.state.epoch - a.presence.state.epoch) || (a.peer < b.peer ? -1 : 1));
+}
+function setPresence(patch){ if(net) net.presence(patch).catch(()=>{}); }
+
+// ---------- state helpers ----------
+function freshState(sides){
+  return {v:1, code, epoch:1, phase:'lobby', sides:sides||20, round:0, pot:0, rollSeq:0, players:[], picks:{}, last:null, hist:[], champ:null};
+}
+function alive(p){ return p.bal >= BET; }
+
+function publish(s){
+  if(JSON.stringify(s) === JSON.stringify(state)) return;
+  state = s; lastState = s;
+  setPresence({state: s});
+  render();
+}
+
+// ---------- HOST LOGIC ----------
+function hostTick(){
+  if(!isHost || !state) return;
+  const s = structuredClone(state);
+  const pres = presentPlayers();
+
+  // name updates & newcomers
+  for(const p of s.players){ const pr = pres.get(p.id); if(pr && pr.name && cleanName(pr.name) !== p.name) p.name = cleanName(pr.name) || p.name; }
+  for(const [pid, pr] of pres){
+    if(s.players.some(p => p.id === pid) || s.players.length >= MAX_PLAYERS) continue;
+    let w = 0;
+    if(s.phase === 'picking'){
+      const act = s.players.filter(p => !p.w && alive(p) && pres.has(p.id)).length;
+      w = act < s.sides ? 0 : 1;
+    } else if(s.phase !== 'lobby') w = 1;
+    s.players.push({id: pid, name: cleanName(pr.name) || 'Player', bal: START, w});
+  }
+  // in the lobby, drop people who left
+  if(s.phase === 'lobby') s.players = s.players.filter(p => pres.has(p.id));
+
+  if(s.phase === 'picking'){
+    const active = s.players.filter(p => !p.w && alive(p) && pres.has(p.id));
+    for(const k of Object.keys(s.picks)) if(!pres.has(k)) delete s.picks[k];
+    const taken = new Set(Object.values(s.picks));
+    const cands = active.filter(p => s.picks[p.id] == null).map(p => ({p, pr: pres.get(p.id)}))
+      .filter(({pr}) => pr.pickRound === s.round && Number.isInteger(pr.pick) && pr.pick >= 1 && pr.pick <= s.sides)
+      .sort((a,b) => (a.pr.pickAt||0) - (b.pr.pickAt||0));
+    for(const {p, pr} of cands){ if(!taken.has(pr.pick)){ s.picks[p.id] = pr.pick; taken.add(pr.pick); } }
+
+    const minPlayers = s.players.length === 1 ? 1 : 2;
+    if(active.length >= minPlayers && active.every(p => s.picks[p.id] != null)){
+      const r = new Uint32Array(1); crypto.getRandomValues(r);
+      const roll = 1 + (r[0] % s.sides);
+      const entrants = active.map(p => p.id);
+      const potTotal = s.pot + BET * entrants.length;
+      const winner = entrants.find(id => s.picks[id] === roll) || null;
+      s.rollSeq++;
+      s.phase = 'rolling';
+      s.last = {round: s.round, roll, winner, entrants, potTotal, picks: {...s.picks}, seq: s.rollSeq};
+      scheduleFinish(s.rollSeq);
+    }
+  }
+  publish(s);
+}
+function scheduleFinish(seq){
+  clearTimeout(rollTimer);
+  rollTimer = setTimeout(() => finishRoll(seq), ROLL_MS);
+}
+function finishRoll(seq){
+  if(!isHost || !state || state.phase !== 'rolling' || state.rollSeq !== seq) return;
+  const s = structuredClone(state), L = s.last;
+  for(const p of s.players) if(L.entrants.includes(p.id)) p.bal -= BET;
+  if(L.winner){ const w = s.players.find(p => p.id === L.winner); if(w) w.bal += L.potTotal; s.pot = 0; }
+  else s.pot = L.potTotal;
+  const wn = L.winner ? (s.players.find(p => p.id === L.winner)||{}).name : null;
+  s.hist = [{r: L.round, roll: L.roll, w: wn, amt: L.potTotal}, ...(s.hist||[])].slice(0, 6);
+  s.phase = 'result';
+  const al = s.players.filter(alive);
+  if(s.players.length >= 2 && al.length <= 1){
+    s.phase = 'over';
+    const champ = al[0] || [...s.players].sort((a,b) => b.bal - a.bal)[0];
+    s.champ = champ ? champ.id : null;
+  }
+  publish(s);
+}
+function hostSetSides(n){
+  if(!isHost || state.phase !== 'lobby') return;
+  n = Math.max(2, Math.min(100, Math.floor(n)||20));
+  publish({...structuredClone(state), sides: n});
+}
+function hostStart(){
+  if(!isHost) return;
+  const s = structuredClone(state);
+  s.phase = 'picking'; s.round = 1; s.picks = {}; s.pot = 0; s.last = null; s.hist = []; s.champ = null;
+  for(const p of s.players){ p.bal = START; p.w = 0; }
+  publish(s); hostTick();
+}
+function hostNext(){
+  if(!isHost || state.phase !== 'result') return;
+  const s = structuredClone(state);
+  s.phase = 'picking'; s.round++; s.picks = {};
+  let act = s.players.filter(p => !p.w && alive(p)).length;
+  for(const p of s.players) if(p.w && act < s.sides){ p.w = 0; act++; }
+  publish(s); hostTick();
+}
+function hostNewGame(){
+  if(!isHost) return;
+  const s = structuredClone(state);
+  s.phase = 'lobby'; s.round = 0; s.pot = 0; s.picks = {}; s.last = null; s.hist = []; s.champ = null;
+  for(const p of s.players){ p.bal = START; p.w = 0; }
+  publish(s); hostTick();
+}
+function becomeHost(fromState){
+  isHost = true;
+  const s = fromState ? structuredClone(fromState) : freshState(20);
+  s.code = code; s.epoch = (fromState ? fromState.epoch : 0) + 1;
+  state = null;
+  publish(s);
+  if(s.phase === 'rolling') scheduleFinish(s.rollSeq);
+  hostTick();
+}
+
+// ---------- everyone: follow the host ----------
+function onRoomChange(){
+  const hosts = hostPeers();
+  const top = hosts[0];
+  if(isHost){
+    if(top && !top.sameTab){ isHost = false; clearTimeout(rollTimer); setPresence({state: null}); }
+    else { hostTick(); return; }
+  }
+  if(top){
+    hostGoneSince = null;
+    const s = top.presence.state;
+    if(JSON.stringify(s) !== JSON.stringify(state)){ state = s; lastState = s; render(); }
+  } else {
+    if(hostGoneSince == null) hostGoneSince = Date.now();
+    maybeTakeOver();
+    render();
+  }
+}
+function maybeTakeOver(){
+  if(isHost || hostGoneSince == null) return;
+  if(Date.now() - hostGoneSince < 3500) return;
+  if(!lastState) return; // nothing to inherit; UI offers "start as host"
+  const pres = presentPlayers();
+  const order = lastState.players.map(p => p.id).filter(id => pres.has(id));
+  for(const id of pres.keys()) if(!order.includes(id)) order.push(id);
+  if(order[0] === myPid){ becomeHost(lastState); toast('Host left — you are now the host'); }
+}
+
+// ---------- player actions ----------
+function pickNumber(n){
+  if(!state || state.phase !== 'picking') return;
+  if(state.picks[myPid] != null) return;
+  const me = state.players.find(p => p.id === myPid);
+  if(!me || me.w || !alive(me)) return;
+  if(Object.values(state.picks).includes(n)) return;
+  myPick = {n, round: state.round};
+  setPresence({pick: n, pickRound: state.round, pickAt: Date.now()});
+  render();
+  if(isHost) hostTick();
+}
+
+// ---------- connecting ----------
+async function enterRoom(roomCode, create){
+  myName = cleanName(myName);
+  if(!myName){ toast('Enter your name first'); return; }
+  store('dadu.name', myName);
+  code = roomCode;
+  screen = 'connecting'; render();
+  if(!room){
+    try { room = window.claude && window.claude.use ? await window.claude.use('room') : null; } catch(e){ room = null; }
+  }
+  if(!room){ screen = 'error'; errorMsg = 'Multiplayer is unavailable in this view. Open this artifact on claude.ai while signed in (and make sure it has been shared with your friends).'; render(); return; }
+  try { net = await room.join(code); }
+  catch(e){ screen = 'error'; errorMsg = 'Could not join the room (' + (e && e.code || 'error') + ').'; render(); return; }
+  try { if(location.hash !== '#' + code) location.hash = code; } catch(e){}
+  joinWaitStart = Date.now();
+  net.onPeers(onRoomChange, err => { screen = 'error'; errorMsg = 'Lost the room connection (' + err.code + ').'; render(); });
+  await net.presence({pid: myPid, name: myName, in: true, pick: null, pickRound: 0, pickAt: 0}).catch(()=>{});
+  screen = 'room';
+  if(create){ becomeHost(null); showInvite = false; }
+  render();
+}
+
+setInterval(() => {
+  if(screen !== 'room') return;
+  if(isHost) hostTick(); else { maybeTakeOver(); if(!state) render(); }
+}, 800);
+
+// ---------- rendering ----------
+function snapshotFocus(){
+  const a = document.activeElement;
+  if(a && a.id && a.tagName === 'INPUT') return {id: a.id, v: a.value, s: a.selectionStart, e: a.selectionEnd};
+  return null;
+}
+function restoreFocus(f){
+  if(!f) return; const el = document.getElementById(f.id);
+  if(el){ el.value = f.v; el.focus(); try{ el.setSelectionRange(f.s, f.e); }catch(e){} }
+}
+
+function render(){
+  const f = snapshotFocus();
+  app.replaceChildren(
+    screen === 'home' ? renderHome() :
+    screen === 'connecting' ? h('div',{class:'home card center'}, h('p',null,'Connecting to room ', h('b',null,code), '…')) :
+    screen === 'error' ? renderError() :
+    renderRoom()
+  );
+  if(showInvite && screen === 'room') app.append(renderInviteModal());
+  restoreFocus(f);
+}
+
+function renderHome(){
+  const hashCode = (location.hash || '').slice(1).toLowerCase();
+  const validHash = /^dice-[a-z0-9]{4,10}$/.test(hashCode);
+  const nameIn = h('input',{id:'nm', placeholder:'Your name', maxlength:16, value:myName, oninput:e => { myName = e.target.value; }});
+  const codeIn = h('input',{id:'cd', placeholder:'Room code (e.g. dice-ab3k9)', value: validHash ? hashCode : ''});
+  const join = () => {
+    let c = codeIn.value.trim().toLowerCase();
+    if(!c.startsWith('dice-')) c = 'dice-' + c;
+    if(!/^dice-[a-z0-9]{4,10}$/.test(c)){ toast('That room code looks wrong'); return; }
+    enterRoom(c, false);
+  };
+  return h('div',{class:'home'},
+    h('h1',{class:'logo'},'DADU'),
+    h('p',{class:'tag muted'},'Pick a number. Roll the die. Take the pot.'),
+    h('div',{class:'card col'},
+      nameIn,
+      validHash
+        ? [h('div',{class:'muted center'},'You were invited to room ', h('b',null,hashCode)),
+           h('button',{class:'primary', onclick: join},'Join room')]
+        : [h('button',{class:'primary', onclick: () => enterRoom('dice-' + rid(5), true)},'Create room'),
+           h('div',{class:'divider'},'or join'),
+           h('div',{class:'row'}, codeIn, h('button',{onclick: join},'Join'))],
+      h('ul',{class:'rules muted'},
+        h('li',null,'Everyone starts with ', h('span',{class:'coin'},START), ' coins. Each round costs ', h('span',{class:'coin'},BET), '.'),
+        h('li',null,'Each player picks one number. No two players can pick the same one.'),
+        h('li',null,'When everyone has picked, the die is rolled. A match takes the whole pot.'),
+        h('li',null,'No match? The pot carries over to the next round.'),
+        h('li',null,'Can’t cover the bet? You’re out. Last one standing wins.')
+      )
+    )
+  );
+}
+
+function renderError(){
+  return h('div',{class:'home card col center'},
+    h('h2',null,'Hmm.'), h('p',{class:'err'},errorMsg),
+    h('button',{onclick: () => { screen='home'; net && net.leave().catch(()=>{}); net=null; isHost=false; state=null; lastState=null; render(); }},'Back'));
+}
+
+function renderInviteModal(){
+  const url = inviteUrl();
+  const qr = h('div',{class:'qrbox'});
+  if(url && window.QRCode){ try { new QRCode(qr, {text: url, width: 220, height: 220, colorDark:'#14101f', colorLight:'#ffffff', correctLevel: QRCode.CorrectLevel.M}); } catch(e){} }
+  return h('div',{class:'modal', onclick: e => { if(e.target.classList.contains('modal')){ showInvite=false; render(); } }},
+    h('div',{class:'card'},
+      h('h2',null,'Invite players'),
+      url ? qr : h('p',{class:'muted center'},'Share this artifact, then give friends the room code.'),
+      h('div',{class:'code'}, code),
+      url ? h('div',{class:'linkline'}, url) : null,
+      h('div',{class:'row'},
+        h('button',{onclick: () => { navigator.clipboard.writeText(url || code).then(() => toast('Copied!'), () => toast('Copy blocked — select the text instead')); }}, url ? 'Copy link' : 'Copy code'),
+        h('button',{class:'ghost', onclick: () => { showInvite=false; render(); }},'Close'))
+    ));
+}
+
+function renderRoom(){
+  const top = h('div',{class:'top'},
+    h('div',{class:'row'}, h('h2',{class:'logo', style:'font-size:28px;margin:0'},'DADU'), h('span',{class:'code muted'}, code)),
+    h('div',{class:'row'},
+      h('button',{onclick: () => { showInvite = true; render(); }}, 'Invite (QR)'),
+      h('button',{class:'ghost', onclick: leaveRoom}, 'Leave'))
+  );
+  if(!state){
+    const waited = Date.now() - joinWaitStart;
+    return h('div',null, top, h('div',{class:'card col center', style:'max-width:460px;margin:40px auto'},
+      h('p',null, 'Looking for the host of ', h('b',null,code), '…'),
+      waited > 5000 ? [h('p',{class:'muted'},'Nobody is hosting this room right now.'), h('button',{class:'primary', onclick: () => becomeHost(null)},'Host this room')] : null));
+  }
+  const s = state;
+  const me = s.players.find(p => p.id === myPid);
+  const pres = presentPlayers();
+  const myBal = me ? me.bal : START;
+  const stats = h('div',{class:'stats'},
+    h('div',{class:'stat pot'}, h('div',{class:'k'},'Pot'), h('div',{class:'v'}, h('span',{class:'coin'}, s.phase==='rolling' && s.last ? s.last.potTotal : s.pot))),
+    h('div',{class:'stat'}, h('div',{class:'k'},'Your coins'), h('div',{class:'v'}, h('span',{class:'coin'}, myBal))),
+    h('div',{class:'stat'}, h('div',{class:'k'}, s.phase==='lobby' ? 'Die' : 'Round'), h('div',{class:'v'}, s.phase==='lobby' ? 'd'+s.sides : s.round + ' · d' + s.sides))
+  );
+  return h('div',null, top,
+    h('div',{class:'grid'},
+      h('div',{class:'side col'}, renderPlayers(s, pres)),
+      h('div',null, stats, h('div',{class:'card stage'}, renderStage(s, me)))
+    ));
+}
+
+function renderPlayers(s, pres){
+  const hostPid = (() => { const t = hostPeers()[0]; return t ? t.presence.pid : (isHost ? myPid : null); })();
+  const revealed = (s.phase === 'result' || s.phase === 'over' || (s.phase === 'rolling' && !animating));
+  const list = [...s.players].sort((a,b) => b.bal - a.bal);
+  return h('div',{class:'card'},
+    h('h3',{style:'margin-bottom:12px'}, 'Players (' + s.players.length + ')'),
+    h('ul',{class:'players'}, list.map(p => {
+      const online = pres.has(p.id);
+      const pick = s.picks[p.id] ?? (s.last && (s.phase==='result'||s.phase==='rolling') ? s.last.picks[p.id] : undefined);
+      const isWin = revealed && s.last && s.last.winner === p.id && s.phase !== 'lobby';
+      const out = s.phase !== 'lobby' && !alive(p) && !(s.phase==='rolling');
+      return h('li',{class:'pl' + (p.id===myPid?' me':'') + (!online?' off':'') + (out?' out':'') + (isWin?' win':'')},
+        h('div',{class:'av', style:'background:'+colorFor(p.id)}, (p.name||'?')[0].toUpperCase()),
+        h('div',{style:'flex:1;min-width:0'},
+          h('div',{class:'nm'}, p.name, p.id===myPid ? ' (you)' : ''),
+          h('div',{class:'sub row', style:'gap:6px'},
+            h('span',{class:'coin', style:'font-size:12px'}, p.bal),
+            p.id === hostPid ? h('span',{class:'badge'},'host') : null,
+            p.w ? h('span',{class:'badge'},'next round') : null,
+            !online ? h('span',{class:'badge'},'away') : null)),
+        s.phase === 'lobby' ? null :
+          h('span',{class:'pickchip' + (pick!=null?' yes':'')}, pick!=null ? pick : (s.phase==='picking' && !p.w && alive(p) && online ? '…' : '–'))
+      );
+    })),
+    s.hist && s.hist.length ? h('div',{class:'hist'}, h('b',{style:'color:var(--text)'},'History'),
+      s.hist.map(x => h('div',null, 'R'+x.r+': rolled '+x.roll+' — ', x.w ? x.w + ' won ' + x.amt : 'no winner, pot ' + x.amt))) : null
+  );
+}
+
+function diceEl(sides, num, cls){
+  return h('div',{class:'dice ' + (cls||''), html: diceSVG(sides, num)});
+}
+
+function renderStage(s, me){
+  // detect a new roll to animate
+  if(s.last && s.last.seq !== seenRollSeq){
+    seenRollSeq = s.last.seq;
+    if(s.phase === 'rolling') startAnim(s.sides);
+  }
+
+  if(s.phase === 'lobby'){
+    const canStart = s.players.length >= 2 && s.sides >= s.players.length;
+    return [
+      h('div',{class:'phase'},'Lobby'),
+      diceEl(s.sides, 'd'+s.sides),
+      isHost ? [
+        h('div',{class:'muted'},'Choose the die'),
+        h('div',{class:'sizes'},
+          SIZES.map(n => h('button',{class: s.sides===n ? 'on' : '', onclick: () => hostSetSides(n)}, 'd'+n)),
+          h('input',{id:'custom', type:'number', min:2, max:100, placeholder:'custom', style:'width:110px', value: SIZES.includes(s.sides) ? '' : s.sides,
+            onchange: e => hostSetSides(parseInt(e.target.value,10)), onkeydown: e => { if(e.key==='Enter') hostSetSides(parseInt(e.target.value,10)); }})),
+        h('button',{class:'primary', disabled: !canStart, onclick: hostStart, style:'min-width:220px'}, 'Start game'),
+        !canStart ? h('div',{class:'muted'}, s.players.length < 2 ? 'Waiting for at least 2 players… tap Invite to show the QR.' : 'The die needs at least as many sides as there are players.') : null,
+        renderInlineQR()
+      ] : h('div',{class:'big'},'Waiting for the host to start…')
+    ];
+  }
+
+  if(s.phase === 'over'){
+    const champ = s.players.find(p => p.id === s.champ);
+    if(champ && champ.id === myPid) confettiOnce('over'+s.rollSeq);
+    return [
+      h('div',{class:'phase'},'Game over'),
+      h('div',{style:'font-size:64px'},'🏆'),
+      h('div',{class:'big'}, champ ? champ.name + ' wins the table!' : 'Game over'),
+      champ ? h('div',null, 'Final stack: ', h('span',{class:'coin'}, champ.bal)) : null,
+      s.last ? h('div',{class:'muted'}, 'Last roll: ' + s.last.roll) : null,
+      isHost ? h('button',{class:'primary', onclick: hostNewGame},'New game (everyone back to ' + START + ')') : h('div',{class:'muted'},'Waiting for the host to start a new game…')
+    ];
+  }
+
+  if(s.phase === 'rolling' || s.phase === 'result'){
+    const L = s.last;
+    if(animating) return [h('div',{class:'phase'},'Rolling…'), diceEl(s.sides, animNum, 'spin'), h('div',{class:'muted'},'Pot: ', h('span',{class:'coin'}, L.potTotal))];
+    const winner = L.winner ? s.players.find(p => p.id === L.winner) : null;
+    const iWon = L.winner === myPid, iWasIn = L.entrants.includes(myPid);
+    if(iWon) confettiOnce('w'+L.seq);
+    const meNow = s.players.find(p => p.id === myPid);
+    return [
+      h('div',{class:'phase'},'Round ' + L.round + ' result'),
+      diceEl(s.sides, L.roll, landed ? '' : 'land'),
+      winner
+        ? h('div',{class:'banner win'}, iWon ? 'You hit ' + L.roll + '! You take ' : winner.name + ' hit ' + L.roll + ' and takes ', h('span',{class:'coin'}, L.potTotal))
+        : h('div',{class:'banner miss'}, 'Nobody picked ' + L.roll + '. The pot of ', h('span',{class:'coin'}, L.potTotal), ' carries over.'),
+      iWasIn && !iWon && meNow && !alive(meNow) && s.phase==='result' ? h('div',{class:'banner lose'},'You’re out of coins. Better luck next game!') : null,
+      s.phase === 'result'
+        ? (isHost ? h('button',{class:'primary', onclick: hostNext, style:'min-width:220px'},'Next round') : h('div',{class:'muted'},'Waiting for the host to start the next round…'))
+        : h('div',{class:'muted'},'Settling bets…')
+    ];
+  }
+
+  // picking
+  const pickedN = Object.keys(s.picks).length;
+  const pres = presentPlayers();
+  const active = s.players.filter(p => !p.w && alive(p) && pres.has(p.id));
+  const confirmed = s.picks[myPid];
+  if(myPick && myPick.round !== s.round) myPick = null;
+  const pending = confirmed == null && myPick ? myPick.n : null;
+  const takenBy = {}; for(const [pid, n] of Object.entries(s.picks)) takenBy[n] = pid;
+  if(pending != null && takenBy[pending] && takenBy[pending] !== myPid){ myPick = null; }
+  const canPick = me && !me.w && alive(me) && confirmed == null;
+  let msg;
+  if(!me) msg = 'You’re watching. You’ll join next round.';
+  else if(me.w) msg = 'You’ll join next round.';
+  else if(!alive(me)) msg = 'You’re out of coins. Watch the rest!';
+  else if(confirmed != null) msg = 'Locked in: ' + confirmed + '. Waiting for others…';
+  else if(pending != null) msg = 'Locking in ' + pending + '…';
+  else msg = 'Pick your number. Costs ' + BET + ' coins.';
+  return [
+    h('div',{class:'phase'},'Round ' + s.round + ' · pick a number'),
+    h('div',{class:'big', style:'font-size:22px'}, msg),
+    h('div',{class:'muted'}, pickedN + ' / ' + active.length + ' players picked'),
+    h('div',{class:'numgrid'}, Array.from({length: s.sides}, (_, i) => {
+      const n = i + 1, by = takenBy[n];
+      const mine = by === myPid, taken = by && !mine, isPend = pending === n;
+      const who = taken ? (s.players.find(p => p.id === by)||{}).name : null;
+      return h('button',{class:'num' + (mine?' mine':'') + (taken?' taken':'') + (isPend?' pending':''), disabled: !canPick || taken, onclick: () => pickNumber(n)},
+        n, who ? h('span',{class:'who'}, who) : null);
+    }))
+  ];
+}
+
+function renderInlineQR(){
+  const url = inviteUrl();
+  if(!url || !window.QRCode) return h('div',{class:'muted center'}, 'Room code: ', h('b',null,code));
+  const qr = h('div',{class:'qrbox'});
+  try { new QRCode(qr, {text: url, width: 150, height: 150, colorDark:'#14101f', colorLight:'#ffffff', correctLevel: QRCode.CorrectLevel.M}); } catch(e){}
+  return h('div',{class:'col', style:'align-items:center;gap:8px;margin-top:6px'}, h('div',{class:'muted'},'Scan to join'), qr);
+}
+
+function startAnim(sides){
+  clearTimeout(animTimer);
+  animating = true; landed = false;
+  const t0 = Date.now();
+  const step = () => {
+    const t = Date.now() - t0;
+    if(t >= ANIM_MS){ animating = false; render(); setTimeout(() => { landed = true; }, 600); return; }
+    animNum = 1 + Math.floor(Math.random() * sides);
+    render();
+    animTimer = setTimeout(step, 60 + (t / ANIM_MS) * 220);
+  };
+  step();
+}
+
+const confettiDone = new Set();
+function confettiOnce(key){
+  if(confettiDone.has(key)) return; confettiDone.add(key);
+  for(let i=0;i<40;i++){
+    const c = h('div',{class:'confetti', style:`left:${Math.random()*100}vw;animation-duration:${1.8+Math.random()*1.8}s;animation-delay:${Math.random()*.5}s`}, ['🪙','✨','🎲','💰'][i%4]);
+    document.body.append(c); setTimeout(() => c.remove(), 4500);
+  }
+}
+
+function leaveRoom(){
+  if(net){ net.leave().catch(()=>{}); }
+  net = null; isHost = false; state = null; lastState = null; code = null; myPick = null; seenRollSeq = -1;
+  clearTimeout(rollTimer);
+  try { history.replaceState(null, '', location.pathname + location.search); } catch(e){ try{ location.hash = ''; }catch(_){} }
+  screen = 'home'; render();
+}
+
+window.addEventListener('hashchange', () => { if(screen === 'home') render(); });
+render();
+})();
+</script>
+</body>
+</html>
