@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.4/peerjs.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mqtt/5.10.1/mqtt.min.js"></script>
 <style>
   :root{
     --bg:#14101f; --panel:#1f1830; --panel2:#2a2140; --line:#3b2f58;
@@ -140,127 +140,93 @@ let rollTimer = null;
 let joinWaitStart = 0;
 
 
-// ---------- PeerJS transport (used outside claude.ai, e.g. GitHub Pages) ----------
-// Same shape as a claude `room` named room: presence(), peers(), onPeers(), leave().
-// Star topology: one browser claims the hub id for the room and relays everyone's
-// presence; if the hub drops, the others race to claim it again.
-function peerTransport(roomCode, preferHub){
-  const HUB = 'dadu-hub-' + roomCode;
-  const OPTS = Object.assign({debug: 0, config: {iceServers: [
-    {urls: 'stun:stun.l.google.com:19302'}, {urls: 'stun:stun.cloudflare.com:3478'}]}}, window.DADU_PEER_OPTS || {});
-  let mine = {}, mode = null, peer = null, hubConn = null, closed = false;
-  let snapshot = [], lastHubMsg = 0, connectTimer = null, sendTimer = null, bcastTimer = null;
-  const clients = new Map(); // hub only: label -> {conn, presence, seen}
-  const listeners = [];
-  let readyResolve, readyReject; const ready = new Promise((a, b) => { readyResolve = a; readyReject = b; });
-  let readyDone = false, failCount = 0;
-  const myLabel = () => peer ? peer.id : 'me';
-  const notify = () => listeners.slice().forEach(f => { try { f({peers: snapshot}); } catch(e){ console.error(e); } });
-  const setSnap = list => { const me = myLabel(); snapshot = list.map(x => Object.freeze({peer: x.peer, presence: x.presence || {}, sameTab: x.peer === me, isMe: x.peer === me})); notify(); };
-  const markReady = () => { failCount = 0; if(!readyDone){ readyDone = true; readyResolve(api); } };
-  const kill = () => { clearTimeout(connectTimer); try { peer && peer.destroy(); } catch(e){} peer = null; hubConn = null; mode = null; clients.clear(); };
+// ---------- Relay transport (used outside claude.ai, e.g. GitHub Pages) ----------
+// Same shape as a claude `room` named room: presence(), peers(), onPeers(), connected(), leave().
+// Every player publishes its presence as a retained MQTT message on dadu/v2/<room>/p/<label>
+// through public brokers over secure websockets (works on mobile data, no peer-to-peer needed).
+// A last-will message clears it when a player drops. We use two brokers at once and merge,
+// so the game keeps working if one of them is down.
+function relayTransport(roomCode){
+  const BROKERS = window.DADU_BROKERS || ['wss://broker.emqx.io:8084/mqtt', 'wss://broker.hivemq.com:8884/mqtt'];
+  const BASE = 'dadu/v2/' + roomCode + '/p/';
+  const label = 'c' + rid(10);
+  const MY_TOPIC = BASE + label;
+  const STALE_MS = 25000, HEARTBEAT_MS = 8000;
   const dbg = (...a) => { if(window.DADU_DEBUG) console.log('[net]', ...a); };
-  // Only the most recent scheduled attempt may run; events from stale Peer objects are ignored.
-  let gen = 0;
-  const retry = (fn, ms) => { if(closed) return; const g = ++gen; failCount++;
-    if(!readyDone && failCount > 8){ readyDone = true; readyReject(new Error('could not reach the matchmaking server')); return; }
-    setTimeout(() => { if(!closed && g === gen) fn(); }, ms); };
-  const lostHub = (ms) => { dbg('lostHub', mode); if(mode !== 'client' && mode !== null) return; hubConn = null; mode = 'lost';
-    setSnap([{peer: myLabel(), presence: mine}]); retry(tryClient, ms); };
+  let mine = {}, closed = false, snapshot = [], notifyTimer = null, pubTimer = null;
+  const seen = new Map();   // label -> {pr, ts (sender clock), at (my clock)}
+  const listeners = [];
 
-  function hubBroadcast(){
-    if(bcastTimer) return;
-    bcastTimer = setTimeout(() => {
-      bcastTimer = null; if(mode !== 'hub') return;
-      const list = [{peer: myLabel(), presence: mine}, ...[...clients].map(([l, c]) => ({peer: l, presence: c.presence}))];
-      setSnap(list);
-      const msg = {t: 'peers', list};
-      for(const c of clients.values()) if(c.conn.open) { try { c.conn.send(msg); } catch(e){} }
-    }, 40);
+  function rebuild(){
+    const list = [{peer: label, presence: mine, sameTab: true, isMe: true}];
+    for(const [l, v] of seen) list.push({peer: l, presence: v.pr, sameTab: false, isMe: false});
+    snapshot = list;
   }
-  function clientSend(){
-    if(sendTimer) return;
-    sendTimer = setTimeout(() => { sendTimer = null; if(mode === 'client' && hubConn && hubConn.open) { try { hubConn.send({t: 'p', pr: mine}); } catch(e){} } }, 40);
+  function notify(){
+    if(notifyTimer) return;
+    notifyTimer = setTimeout(() => { notifyTimer = null; rebuild(); listeners.slice().forEach(f => { try { f({peers: snapshot}); } catch(e){ console.error(e); } }); }, 30);
   }
+  function publishNow(){
+    const payload = JSON.stringify({pr: mine, ts: Date.now()});
+    for(const c of clients) if(c.connected) c.publish(MY_TOPIC, payload, {qos: 0, retain: true});
+  }
+  function publish(){ if(pubTimer) return; pubTimer = setTimeout(() => { pubTimer = null; if(!closed) publishNow(); }, 60); }
 
-  function tryHub(){
-    dbg('tryHub');
-    if(closed) return; kill(); mode = 'connecting';
-    const p = peer = new Peer(HUB, OPTS);
-    p.on('open', () => {
-      if(p !== peer) return;
-      dbg('I am hub'); mode = 'hub'; markReady(); hubBroadcast();
-    });
-    p.on('connection', conn => {
-      if(p !== peer) return;
-      conn.on('open', () => { if(p !== peer) return; clients.set(conn.peer, {conn, presence: {}, seen: Date.now()}); hubBroadcast(); });
-      conn.on('data', d => { if(p !== peer) return; const c = clients.get(conn.peer); if(!c || !d) return; c.seen = Date.now();
-        if(d.t === 'p' && d.pr && typeof d.pr === 'object' && JSON.stringify(d.pr).length < 6000){ c.presence = d.pr; hubBroadcast(); } });
-      const drop = () => { if(p !== peer) return; const c = clients.get(conn.peer); if(c && c.conn === conn){ clients.delete(conn.peer); hubBroadcast(); } };
-      conn.on('close', drop); conn.on('error', drop);
-    });
-    p.on('disconnected', () => { if(p === peer && !p.destroyed) { try { p.reconnect(); } catch(e){} } });
-    p.on('error', e => {
-      dbg('hub err', e.type);
-      if(p !== peer) return;
-      if(e.type === 'peer-unavailable') return;                                    // a client vanished; harmless
-      if(e.type === 'unavailable-id') retry(tryClient, 300 + Math.random() * 700); // someone else is hub
-      else retry(preferHub && !readyDone ? tryHub : tryClient, 1500 + Math.random() * 1500);
-    });
+  function onMessage(topic, buf){
+    if(!topic.startsWith(BASE)) return;
+    const l = topic.slice(BASE.length);
+    if(l === label) return;
+    if(!buf || !buf.length){ if(seen.delete(l)) notify(); return; }      // cleared (left / last will)
+    let m; try { m = JSON.parse(new TextDecoder().decode(buf)); } catch(e){ return; }
+    if(!m || typeof m !== 'object' || !m.pr || typeof m.pr !== 'object' || typeof m.ts !== 'number') return;
+    if(Date.now() - m.ts > 60000) return;                                // leftover retained message
+    const old = seen.get(l);
+    if(old && m.ts < old.ts) return;                                     // older copy via the other broker
+    seen.set(l, {pr: m.pr, ts: m.ts, at: Date.now()});
+    if(!old || JSON.stringify(old.pr) !== JSON.stringify(m.pr)) notify();
   }
 
-  function tryClient(){
-    dbg('tryClient');
-    if(closed) return; kill(); mode = 'connecting';
-    const p = peer = new Peer('dadu-c-' + rid(10), OPTS);
-    p.on('open', () => {
-      if(p !== peer) return;
-      const conn = p.connect(HUB, {reliable: true});
-      connectTimer = setTimeout(() => { if(p === peer && mode === 'connecting') retry(tryHub, Math.random() * 1500); }, 7000);
-      conn.on('open', () => {
-        if(p !== peer) return;
-        dbg('connected to hub'); clearTimeout(connectTimer); hubConn = conn; mode = 'client'; lastHubMsg = Date.now(); markReady();
-        conn.send({t: 'p', pr: mine});
-      });
-      conn.on('data', d => { if(p !== peer || !d || d.t !== 'peers' || !Array.isArray(d.list)) return; lastHubMsg = Date.now(); setSnap(d.list); });
-      const lost = () => { if(p === peer && hubConn === conn) lostHub(300 + Math.random() * 1200); };
-      conn.on('close', lost); conn.on('error', lost);
+  if(typeof mqtt === 'undefined' || !mqtt.connect) return Promise.reject(new Error('networking library failed to load'));
+  const clients = BROKERS.map(url => {
+    const c = mqtt.connect(url, {
+      clientId: 'dadu_' + rid(12), keepalive: 20, reconnectPeriod: 2500, connectTimeout: 10000, clean: true,
+      will: {topic: MY_TOPIC, payload: '', qos: 0, retain: true},
     });
-    p.on('error', e => {
-      dbg('client err', e.type);
-      if(p !== peer) return;
-      if(e.type === 'peer-unavailable') retry(tryHub, Math.random() * 800);   // no hub: try to become it
-      else retry(tryClient, 1500 + Math.random() * 1500);
-    });
-  }
+    c.on('connect', () => { dbg('connected', url); c.subscribe(BASE + '+', {qos: 0}); publishNow(); markReady(); notify(); });
+    c.on('message', onMessage);
+    c.on('close', () => { dbg('closed', url); notify(); });
+    c.on('error', e => dbg('error', url, e && e.message));
+    return c;
+  });
 
-  // heartbeats: keep presence fresh, drop silent clients, detect a dead hub
   const hb = setInterval(() => {
     if(closed) return;
-    if(mode === 'hub'){
-      const now = Date.now();
-      for(const [l, c] of clients) if(now - c.seen > 6500){ try { c.conn.close(); } catch(e){} clients.delete(l); }
-      hubBroadcast();
-    } else if(mode === 'client'){
-      clientSend();
-      if(Date.now() - lastHubMsg > 6500) lostHub(300 + Math.random() * 1200);
-    }
-  }, 2000);
+    publishNow();
+    const now = Date.now(); let changed = false;
+    for(const [l, v] of seen) if(now - v.at > STALE_MS){ seen.delete(l); changed = true; }
+    if(changed) notify();
+  }, HEARTBEAT_MS);
+
+  let readyResolve, readyReject, readyDone = false;
+  const ready = new Promise((a, b) => { readyResolve = a; readyReject = b; });
+  function markReady(){ if(!readyDone){ readyDone = true; readyResolve(api); } }
+  setTimeout(() => { if(!readyDone){ readyDone = true; api.leave(); readyReject(new Error('could not reach the game server (tried ' + BROKERS.length + ')')); } }, 15000);
 
   const api = {
     name: roomCode,
     presence(patch){ mine = Object.assign({}, mine); for(const k in patch){ if(patch[k] === null) delete mine[k]; else mine[k] = patch[k]; }
-      if(mode === 'hub') hubBroadcast(); else { clientSend(); if(mode !== 'client') setSnap([{peer: myLabel(), presence: mine}]); }
-      return Promise.resolve(); },
-    peers(){ return snapshot.length ? snapshot : [{peer: myLabel(), presence: mine, sameTab: true, isMe: true}]; },
-    onPeers(fn){ listeners.push(fn); setTimeout(() => fn({peers: snapshot}), 0); return () => { const i = listeners.indexOf(fn); if(i >= 0) listeners.splice(i, 1); }; },
-    connected(){ return mode === 'hub' || mode === 'client'; },
-    leave(){ closed = true; clearInterval(hb); kill(); return Promise.resolve(); },
+      publish(); notify(); return Promise.resolve(); },
+    peers(){ if(!snapshot.length) rebuild(); return snapshot; },
+    onPeers(fn){ listeners.push(fn); setTimeout(() => fn({peers: api.peers()}), 0); return () => { const i = listeners.indexOf(fn); if(i >= 0) listeners.splice(i, 1); }; },
+    connected(){ return clients.some(c => c.connected); },
+    leave(){
+      if(closed) return Promise.resolve(); closed = true; clearInterval(hb);
+      for(const c of clients){ try { if(c.connected) c.publish(MY_TOPIC, '', {qos: 0, retain: true}); c.end(false); } catch(e){} }
+      return Promise.resolve();
+    },
   };
-  if(typeof Peer !== 'function'){ return Promise.reject(new Error('networking library failed to load')); }
-  // release the hub id / close channels at once when the tab goes away, so others recover fast
-  window.addEventListener('pagehide', () => { if(!closed) api.leave(); });
-  (preferHub ? tryHub : tryClient)();
+  // clear our presence at once when the tab goes away, so others notice quickly
+  window.addEventListener('pagehide', () => { api.leave(); });
   return ready;
 }
 
@@ -508,8 +474,8 @@ async function enterRoom(roomCode, create){
     }
   }
   if(!net){
-    transport = 'peer';
-    try { net = await peerTransport(code, create); }
+    transport = 'relay';
+    try { net = await relayTransport(code); }
     catch(e){ screen = 'error'; errorMsg = 'Could not connect: ' + (e && e.message || e) + '. Check your connection and try again.'; render(); return; }
   }
   try { if(location.hash !== '#' + code) location.hash = code; } catch(e){}
@@ -795,6 +761,8 @@ function leaveRoom(){
 }
 
 window.addEventListener('hashchange', () => { if(screen === 'home') render(); });
+// iOS Safari may restore a frozen page whose connection was closed: reload to rejoin (seat and coins are kept)
+window.addEventListener('pageshow', e => { if(e.persisted && transport === 'relay') location.reload(); });
 render();
 })();
 </script>
