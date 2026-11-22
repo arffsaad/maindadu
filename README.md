@@ -9,7 +9,13 @@ A multiplayer dice betting game in a single `index.html`.
 - Everyone starts with 200 coins; each round costs 20.
 - Each player picks one number on the die; no two players may share a number.
 - When everyone has picked, the die is rolled. A match takes the whole pot; otherwise the pot carries over.
-- Can't cover the bet and you're out. Last player standing wins.
+- Can't cover the bet and you're out. Last player standing wins (if every human is out, the bots win).
+
+## Bots
+In the lobby the host can add bots: pick a number with −/+ or choose **Fill space** to give every free
+number a bot (up to 24 players). Bots pick a random free number after a short think, avoid numbers a human is
+about to claim, and bet, win and go bust like everyone else. A friend who joins mid-game replaces the poorest
+bot at the next round. Bots are run by whichever browser is the host, so they carry over if the host changes.
 
 ## How multiplayer works
 The room creator's browser is the game host and keeps the game state. Outside claude.ai, every player

@@ -64,6 +64,7 @@
   .pl .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .pl .sub{font-size:12px;color:var(--muted)}
   .badge{font-size:11px;padding:2px 7px;border-radius:99px;background:#3a2d5c;color:var(--accent2);font-weight:600}
+  .av.bot{font-size:18px;background:#3a2d5c !important}
   .pickchip{min-width:34px;text-align:center;padding:4px 8px;border-radius:8px;background:#120d1d;font-weight:700}
   .pickchip.yes{background:var(--accent);color:#fff}
 
@@ -302,9 +303,54 @@ function setPresence(patch){ if(net) net.presence(patch).catch(()=>{}); }
 
 // ---------- state helpers ----------
 function freshState(sides){
-  return {v:1, code, epoch:1, phase:'lobby', sides:sides||20, round:0, pot:0, rollSeq:0, players:[], picks:{}, last:null, hist:[], champ:null};
+  return {v:1, code, epoch:1, phase:'lobby', bots:{m:'off', n:0}, sides:sides||20, round:0, pot:0, rollSeq:0, players:[], picks:{}, last:null, hist:[], champ:null};
 }
 function alive(p){ return p.bal >= BET; }
+
+// ---------- bots (run by whoever is host; they live only in the shared state) ----------
+const BOT_NAMES = ['Bolt','Rusty','Pixel','Sprocket','Gizmo','Byte','Nova','Cog','Widget','Echo','Chip','Ziggy','Turbo','Blip','Servo','Dynamo','Flux','Glitch','Volt','Zap','Ion','Nano','Rivet','Beep'];
+// present = a bot, or a human whose browser is in the room
+function here(p, pres){ return !!p.bot || pres.has(p.id); }
+function botTarget(s){
+  const b = s.bots || {m: 'off', n: 0};
+  if(b.m === 'off') return 0;
+  const humans = s.players.filter(p => !p.bot).length;
+  const room = Math.max(0, Math.min(s.sides, MAX_PLAYERS) - humans);
+  return b.m === 'fill' ? room : Math.min(b.n || 0, room);
+}
+function syncBots(s){
+  const want = botTarget(s);
+  let bots = s.players.filter(p => p.bot);
+  while(bots.length > want){ const drop = bots.pop(); s.players = s.players.filter(p => p !== drop); }
+  const used = new Set(bots.map(p => p.name));
+  for(let i = bots.length; i < want; i++){
+    const name = BOT_NAMES.find(n => !used.has(n)) || ('Bot ' + (i + 1));
+    used.add(name);
+    s.players.push({id: 'b' + rid(4), name, bal: START, w: 0, bot: 1});
+  }
+}
+// host-local plan of when each bot "decides" this round (not shared state)
+let botPlan = {key: null, at: {}};
+function botsPick(s, pres){
+  const key = s.code + ':' + s.round;
+  if(botPlan.key !== key) botPlan = {key, at: {}};
+  const now = Date.now();
+  const taken = new Set(Object.values(s.picks));
+  // numbers humans are about to claim: bots leave those alone
+  const wanted = new Set();
+  for(const pr of pres.values()) if(pr.pickRound === s.round && Number.isInteger(pr.pick)) wanted.add(pr.pick);
+  for(const p of s.players){
+    if(!p.bot || p.w || !alive(p) || s.picks[p.id] != null) continue;
+    if(!botPlan.at[p.id]) botPlan.at[p.id] = now + 1200 + Math.random() * 4500;
+    if(now < botPlan.at[p.id]) continue;
+    let free = [];
+    for(let n = 1; n <= s.sides; n++) if(!taken.has(n) && !wanted.has(n)) free.push(n);
+    if(!free.length) for(let n = 1; n <= s.sides; n++) if(!taken.has(n)) free.push(n);
+    if(!free.length) continue;
+    const n = free[Math.floor(Math.random() * free.length)];
+    s.picks[p.id] = n; taken.add(n);
+  }
+}
 
 function publish(s){
   if(JSON.stringify(s) === JSON.stringify(state)) return;
@@ -322,28 +368,31 @@ function hostTick(){
   // name updates & newcomers
   for(const p of s.players){ const pr = pres.get(p.id); if(pr && pr.name && cleanName(pr.name) !== p.name) p.name = cleanName(pr.name) || p.name; }
   for(const [pid, pr] of pres){
-    if(s.players.some(p => p.id === pid) || s.players.length >= MAX_PLAYERS) continue;
+    if(s.players.some(p => p.id === pid) || s.players.filter(p => !p.bot).length >= MAX_PLAYERS) continue;
     let w = 0;
     if(s.phase === 'picking'){
-      const act = s.players.filter(p => !p.w && alive(p) && pres.has(p.id)).length;
+      const act = s.players.filter(p => !p.w && alive(p) && here(p, pres)).length;
       w = act < s.sides ? 0 : 1;
     } else if(s.phase !== 'lobby') w = 1;
     s.players.push({id: pid, name: cleanName(pr.name) || 'Player', bal: START, w});
   }
   // in the lobby, drop people who left
-  if(s.phase === 'lobby') s.players = s.players.filter(p => pres.has(p.id));
+  if(s.phase === 'lobby'){ s.players = s.players.filter(p => here(p, pres)); syncBots(s); }
 
   if(s.phase === 'picking'){
-    const active = s.players.filter(p => !p.w && alive(p) && pres.has(p.id));
-    for(const k of Object.keys(s.picks)) if(!pres.has(k)) delete s.picks[k];
+    const active = s.players.filter(p => !p.w && alive(p) && here(p, pres));
+    const isBot = id => (s.players.find(p => p.id === id) || {}).bot;
+    for(const k of Object.keys(s.picks)) if(!pres.has(k) && !isBot(k)) delete s.picks[k];
     const taken = new Set(Object.values(s.picks));
-    const cands = active.filter(p => s.picks[p.id] == null).map(p => ({p, pr: pres.get(p.id)}))
+    const cands = active.filter(p => !p.bot && s.picks[p.id] == null).map(p => ({p, pr: pres.get(p.id)}))
       .filter(({pr}) => pr.pickRound === s.round && Number.isInteger(pr.pick) && pr.pick >= 1 && pr.pick <= s.sides)
       .sort((a,b) => (a.pr.pickAt||0) - (b.pr.pickAt||0));
     for(const {p, pr} of cands){ if(!taken.has(pr.pick)){ s.picks[p.id] = pr.pick; taken.add(pr.pick); } }
+    botsPick(s, pres);
 
     const minPlayers = s.players.length === 1 ? 1 : 2;
-    if(active.length >= minPlayers && active.every(p => s.picks[p.id] != null)){
+    const humanIn = active.some(p => !p.bot);   // bots never play on their own
+    if(humanIn && active.length >= minPlayers && active.every(p => s.picks[p.id] != null)){
       const r = new Uint32Array(1); crypto.getRandomValues(r);
       const roll = 1 + (r[0] % s.sides);
       const entrants = active.map(p => p.id);
@@ -371,9 +420,10 @@ function finishRoll(seq){
   s.hist = [{r: L.round, roll: L.roll, w: wn, amt: L.potTotal}, ...(s.hist||[])].slice(0, 6);
   s.phase = 'result';
   const al = s.players.filter(alive);
-  if(s.players.length >= 2 && al.length <= 1){
+  const humansLeft = s.players.some(p => !p.bot && alive(p));
+  if(s.players.length >= 2 && (al.length <= 1 || !humansLeft)){
     s.phase = 'over';
-    const champ = al[0] || [...s.players].sort((a,b) => b.bal - a.bal)[0];
+    const champ = [...(al.length ? al : s.players)].sort((a,b) => b.bal - a.bal)[0];
     s.champ = champ ? champ.id : null;
   }
   publish(s);
@@ -382,6 +432,13 @@ function hostSetSides(n){
   if(!isHost || state.phase !== 'lobby') return;
   n = Math.max(2, Math.min(100, Math.floor(n)||20));
   publish({...structuredClone(state), sides: n});
+}
+function hostSetBots(m, n){
+  if(!isHost || state.phase !== 'lobby') return;
+  const s = structuredClone(state);
+  s.bots = {m, n: Math.max(0, Math.min(MAX_PLAYERS - 1, n|0))};
+  if(m === 'n' && s.bots.n === 0) s.bots.m = 'off';
+  syncBots(s); publish(s);
 }
 function hostStart(){
   if(!isHost) return;
@@ -396,6 +453,12 @@ function hostNext(){
   s.phase = 'picking'; s.round++; s.picks = {};
   let act = s.players.filter(p => !p.w && alive(p)).length;
   for(const p of s.players) if(p.w && act < s.sides){ p.w = 0; act++; }
+  // humans still waiting for a seat bump a bot (the poorest one) out of the game
+  for(const p of s.players.filter(p => p.w && !p.bot)){
+    const bot = s.players.filter(b => b.bot && !b.w).sort((a,b) => a.bal - b.bal)[0];
+    if(!bot) break;
+    s.players = s.players.filter(b => b !== bot); p.w = 0;
+  }
   publish(s); hostTick();
 }
 function hostNewGame(){
@@ -403,6 +466,7 @@ function hostNewGame(){
   const s = structuredClone(state);
   s.phase = 'lobby'; s.round = 0; s.pot = 0; s.picks = {}; s.last = null; s.hist = []; s.champ = null;
   for(const p of s.players){ p.bal = START; p.w = 0; }
+  syncBots(s);
   publish(s); hostTick();
 }
 function becomeHost(fromState){
@@ -504,14 +568,18 @@ function restoreFocus(f){
 }
 
 function render(){
-  const f = snapshotFocus();
-  app.replaceChildren(
+  const nodes = [
     screen === 'home' ? renderHome() :
     screen === 'connecting' ? h('div',{class:'home card center'}, h('p',null,'Connecting to room ', h('b',null,code), '…')) :
     screen === 'error' ? renderError() :
     renderRoom()
-  );
-  if(showInvite && screen === 'room') app.append(renderInviteModal());
+  ];
+  if(showInvite && screen === 'room') nodes.push(renderInviteModal());
+  // Skip the swap when nothing visible changed: replacing buttons mid-tap swallows the tap.
+  const tmp = document.createElement('div'); tmp.append(...nodes);
+  if(tmp.innerHTML === app.innerHTML) return;
+  const f = snapshotFocus();
+  app.replaceChildren(...tmp.childNodes);
   restoreFocus(f);
 }
 
@@ -557,7 +625,7 @@ function renderError(){
 function renderInviteModal(){
   const url = inviteUrl();
   const qr = h('div',{class:'qrbox'});
-  if(url && window.QRCode){ try { new QRCode(qr, {text: url, width: 220, height: 220, colorDark:'#14101f', colorLight:'#ffffff', correctLevel: QRCode.CorrectLevel.M}); } catch(e){} }
+  const src = qrDataUrl(url, 220); if(src) qr.append(h('img',{src, width:220, height:220, alt:'QR code to join'}));
   return h('div',{class:'modal', onclick: e => { if(e.target.classList.contains('modal')){ showInvite=false; render(); } }},
     h('div',{class:'card'},
       h('h2',null,'Invite players'),
@@ -606,17 +674,18 @@ function renderPlayers(s, pres){
   return h('div',{class:'card'},
     h('h3',{style:'margin-bottom:12px'}, 'Players (' + s.players.length + ')'),
     h('ul',{class:'players'}, list.map(p => {
-      const online = pres.has(p.id);
+      const online = here(p, pres);
       const pick = s.picks[p.id] ?? (s.last && (s.phase==='result'||s.phase==='rolling') ? s.last.picks[p.id] : undefined);
       const isWin = revealed && s.last && s.last.winner === p.id && s.phase !== 'lobby';
       const out = s.phase !== 'lobby' && !alive(p) && !(s.phase==='rolling');
       return h('li',{class:'pl' + (p.id===myPid?' me':'') + (!online?' off':'') + (out?' out':'') + (isWin?' win':'')},
-        h('div',{class:'av', style:'background:'+colorFor(p.id)}, (p.name||'?')[0].toUpperCase()),
+        h('div',{class:'av' + (p.bot ? ' bot' : ''), style:'background:'+colorFor(p.id)}, p.bot ? '\u{1F916}' : (p.name||'?')[0].toUpperCase()),
         h('div',{style:'flex:1;min-width:0'},
           h('div',{class:'nm'}, p.name, p.id===myPid ? ' (you)' : ''),
           h('div',{class:'sub row', style:'gap:6px'},
             h('span',{class:'coin', style:'font-size:12px'}, p.bal),
             p.id === hostPid ? h('span',{class:'badge'},'host') : null,
+            p.bot ? h('span',{class:'badge'},'bot') : null,
             p.w ? h('span',{class:'badge'},'next round') : null,
             !online ? h('span',{class:'badge'},'away') : null)),
         s.phase === 'lobby' ? null :
@@ -650,10 +719,11 @@ function renderStage(s, me){
           SIZES.map(n => h('button',{class: s.sides===n ? 'on' : '', onclick: () => hostSetSides(n)}, 'd'+n)),
           h('input',{id:'custom', type:'number', min:2, max:100, placeholder:'custom', style:'width:110px', value: SIZES.includes(s.sides) ? '' : s.sides,
             onchange: e => hostSetSides(parseInt(e.target.value,10)), onkeydown: e => { if(e.key==='Enter') hostSetSides(parseInt(e.target.value,10)); }})),
+        renderBotControls(s),
         h('button',{class:'primary', disabled: !canStart, onclick: hostStart, style:'min-width:220px'}, 'Start game'),
-        !canStart ? h('div',{class:'muted'}, s.players.length < 2 ? 'Waiting for at least 2 players… tap Invite to show the QR.' : 'The die needs at least as many sides as there are players.') : null,
+        !canStart ? h('div',{class:'muted center'}, s.players.length < 2 ? 'Waiting for at least 2 players… invite friends or add bots.' : 'The die needs at least as many sides as there are players.') : null,
         renderInlineQR()
-      ] : h('div',{class:'big'},'Waiting for the host to start…')
+      ] : [h('div',{class:'big'},'Waiting for the host to start…'), botSummary(s) ? h('div',{class:'muted'}, botSummary(s)) : null]
     ];
   }
 
@@ -693,7 +763,7 @@ function renderStage(s, me){
   // picking
   const pickedN = Object.keys(s.picks).length;
   const pres = presentPlayers();
-  const active = s.players.filter(p => !p.w && alive(p) && pres.has(p.id));
+  const active = s.players.filter(p => !p.w && alive(p) && here(p, pres));
   const confirmed = s.picks[myPid];
   if(myPick && myPick.round !== s.round) myPick = null;
   const pending = confirmed == null && myPick ? myPick.n : null;
@@ -721,11 +791,49 @@ function renderStage(s, me){
   ];
 }
 
+function botSummary(s){
+  const n = s.players.filter(p => p.bot).length, b = s.bots || {m:'off'};
+  if(b.m === 'off') return '';
+  return (b.m === 'fill' ? 'Bots: fill the table (' + n + ')' : 'Bots: ' + n);
+}
+function renderBotControls(s){
+  const b = s.bots || {m:'off', n:0};
+  const cur = s.players.filter(p => p.bot).length;
+  const humans = s.players.filter(p => !p.bot).length;
+  const maxBots = Math.max(0, Math.min(s.sides, MAX_PLAYERS) - humans);
+  const base = b.m === 'off' ? 0 : cur;   // what the -/+ buttons step from
+  return h('div',{class:'col', style:'align-items:center;gap:8px'},
+    h('div',{class:'muted'},'Bots'),
+    h('div',{class:'sizes'},
+      h('button',{class: b.m === 'off' ? 'on' : '', onclick: () => hostSetBots('off', 0)}, 'Off'),
+      h('button',{disabled: base <= 0, onclick: () => hostSetBots('n', base - 1), 'aria-label':'fewer bots'}, '\u2212'),
+      h('button',{class: b.m === 'n' ? 'on' : '', style:'min-width:90px', disabled: maxBots < 1, onclick: () => hostSetBots('n', Math.max(1, Math.min(base || 1, maxBots)))},
+        base + (base === 1 ? ' bot' : ' bots')),
+      h('button',{disabled: base >= maxBots, onclick: () => hostSetBots('n', Math.min(maxBots, base + 1)), 'aria-label':'more bots'}, '+'),
+      h('button',{class: b.m === 'fill' ? 'on' : '', onclick: () => hostSetBots('fill', 0)}, 'Fill space')),
+    b.m === 'fill' ? h('div',{class:'muted', style:'font-size:13px'}, 'Bots take every free number' + (s.sides > MAX_PLAYERS ? ' (up to ' + MAX_PLAYERS + ' players)' : '') + '. Friends who join replace a bot.') :
+    b.m === 'n' && b.n > cur ? h('div',{class:'muted', style:'font-size:13px'}, 'Only room for ' + cur + ' bot' + (cur === 1 ? '' : 's') + ' on a d' + s.sides + '.') : null
+  );
+}
+// QR codes as cached PNG data URLs: identical markup on every render
+const qrCache = new Map();
+function qrDataUrl(url, size){
+  const key = size + ' ' + url;
+  if(qrCache.has(key)) return qrCache.get(key);
+  let src = '';
+  try {
+    const box = document.createElement('div');
+    new QRCode(box, {text: url, width: size, height: size, colorDark:'#14101f', colorLight:'#ffffff', correctLevel: QRCode.CorrectLevel.M});
+    const c = box.querySelector('canvas'); if(c) src = c.toDataURL('image/png');
+  } catch(e){}
+  if(src) qrCache.set(key, src);
+  return src;
+}
 function renderInlineQR(){
   const url = inviteUrl();
   if(!url || !window.QRCode) return h('div',{class:'muted center'}, 'Room code: ', h('b',null,code));
   const qr = h('div',{class:'qrbox'});
-  try { new QRCode(qr, {text: url, width: 150, height: 150, colorDark:'#14101f', colorLight:'#ffffff', correctLevel: QRCode.CorrectLevel.M}); } catch(e){}
+  const src = qrDataUrl(url, 150); if(src) qr.append(h('img',{src, width:150, height:150, alt:'QR code to join'}));
   return h('div',{class:'col', style:'align-items:center;gap:8px;margin-top:6px'}, h('div',{class:'muted'},'Scan to join'), qr);
 }
 
@@ -761,6 +869,7 @@ function leaveRoom(){
 }
 
 window.addEventListener('hashchange', () => { if(screen === 'home') render(); });
+if(window.DADU_DEBUG) window.DADU_STATE = () => state;   // console debugging aid
 // iOS Safari may restore a frozen page whose connection was closed: reload to rejoin (seat and coins are kept)
 window.addEventListener('pageshow', e => { if(e.persisted && transport === 'relay') location.reload(); });
 render();
