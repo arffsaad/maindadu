@@ -2,7 +2,7 @@
 
 A multiplayer dice betting game in a single `index.html`.
 
-- **GitHub Pages:** https://arffsaad.github.io/maindadu/ (multiplayer over WebRTC via PeerJS; the free PeerJS cloud server is only used for matchmaking)
+- **GitHub Pages:** https://arffsaad.github.io/maindadu/ (multiplayer through free public MQTT brokers over secure websockets, so it works on mobile data)
 - **Claude artifact:** https://claude.ai/artifact/JNtoXzqqQdAatWfZY4Gtdr (multiplayer via the artifact `room` capability)
 
 ## Rules
@@ -12,9 +12,13 @@ A multiplayer dice betting game in a single `index.html`.
 - Can't cover the bet and you're out. Last player standing wins.
 
 ## How multiplayer works
-The room creator's browser is the game host and keeps the game state. Outside claude.ai, browsers connect
-peer-to-peer with PeerJS: one browser claims the hub id `dadu-hub-<room code>` and relays everyone's state.
-If the host leaves, the remaining players re-elect a hub and a new game host, keeping coins and the pot.
+The room creator's browser is the game host and keeps the game state. Outside claude.ai, every player
+publishes its state as a retained MQTT message on `dadu/v2/<room code>/p/<player>` through two public
+brokers at once (`broker.emqx.io`, `broker.hivemq.com`), and a last-will message clears it when a player
+drops. If the host leaves, the remaining players elect a new host, keeping coins and the pot.
+
+The public brokers are shared and unauthenticated: anyone who knows a room code could read or spoof its
+messages. Fine for a casual game; don't put anything private in it.
 
 Debug the network layer by running `window.DADU_DEBUG = 1` in the console before joining.
-Point at your own PeerJS server with `window.DADU_PEER_OPTS = {host, port, path, secure}`.
+Use your own brokers with `window.DADU_BROKERS = ['wss://host:port/mqtt', ...]`.
